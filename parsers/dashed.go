@@ -3,12 +3,13 @@ package parsers
 import (
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"strconv"
 	"unicode"
 )
 
-type State func(Input, chan byte) (State, error)
+type State func(*Input, chan string) (State, error)
 
 type Input struct {
 	input       string
@@ -34,6 +35,7 @@ func ParseDashed(in string) (out []net.IP, err error) {
 	source := Input{in, 0, 0}
 	ranges, err := parse(source)
 	if err != nil {
+		log.Println(err)
 		return nil, err
 	}
 	var iterRanges [4][2]int
@@ -47,9 +49,9 @@ func ParseDashed(in string) (out []net.IP, err error) {
 	}
 
 	for i := iterRanges[0][0]; i <= iterRanges[0][1]; i++ {
-		for j := iterRanges[1][0]; i <= iterRanges[1][1]; i++ {
-			for k := iterRanges[2][0]; i <= iterRanges[2][1]; i++ {
-				for l := iterRanges[3][0]; i <= iterRanges[3][1]; i++ {
+		for j := iterRanges[1][0]; j <= iterRanges[1][1]; j++ {
+			for k := iterRanges[2][0]; k <= iterRanges[2][1]; k++ {
+				for l := iterRanges[3][0]; l <= iterRanges[3][1]; l++ {
 					out = append(out, net.IPv4(byte(i), byte(j), byte(k), byte(l)))
 				}
 			}
@@ -63,8 +65,11 @@ func parse(source Input) ([4][2]byte, error) {
 	var sink outIPv4
 	checker := func(str string) (value byte, err error) {
 		i, err := strconv.Atoi(str)
+		if err != nil {
+			return
+		}
 		if i > 255 {
-			err = fmt.Errorf("%d overflows byte", value)
+			err = fmt.Errorf("%d overflows byte", i)
 		}
 		value = byte(i)
 		return
@@ -92,8 +97,10 @@ func parse(source Input) ([4][2]byte, error) {
 	var err error
 	//Transitions implementations
 	//The start
-	begin = func(source Input, sink chan byte) (State, error) {
+	begin = func(source *Input, sink chan string) (State, error) {
 		//Let's see what's next
+		//TODO handle null input
+		log.Printf("Begin (%s)\n", string(source.input[source.current]))
 		switch c := rune(source.input[source.current]); {
 		case unicode.IsNumber(c):
 			//DOT begin -> startByte[label="\d"];
@@ -101,7 +108,7 @@ func parse(source Input) ([4][2]byte, error) {
 		case c == '-':
 			//DOT begin -> dash[label="- \n → 0"];
 			//No starting value, default to 0
-			sink <- 0
+			sink <- "0"
 			return dash, nil
 		default:
 			return nil, fmt.Errorf("Unexpected %s at index 0 of ", string(c), source.input)
@@ -109,20 +116,17 @@ func parse(source Input) ([4][2]byte, error) {
 	}
 
 	//The first or the only byte of a range
-	startByte = func(source Input, sink chan byte) (State, error) {
+	startByte = func(source *Input, sink chan string) (State, error) {
 		//Move cursor
 		source.current++
 		//Input is finished, let's hope everithing went well and exit gently using the
 		//read byte as begin and start
 		if source.current >= len(source.input) {
-			value, err := checker(source.input[source.token_begin:source.current])
-			if err != nil {
-				return nil, err
-			}
-			sink <- value
-			sink <- value
+			sink <- source.input[source.token_begin:source.current]
+			sink <- source.input[source.token_begin:source.current]
 			return nil, io.EOF
 		}
+		log.Printf("Start Byte (%s)\n", string(source.input[source.current]))
 		switch c := rune(source.input[source.current]); {
 		case unicode.IsNumber(c):
 			//DOT startByte -> startByte[label="\d"];
@@ -136,37 +140,33 @@ func parse(source Input) ([4][2]byte, error) {
 			//move to the dash state
 			//100.0-10.0-.1
 			//    ^↑
-			value, err := checker(source.input[source.token_begin:source.current])
-			sink <- value
-			return dash, err
+			sink <- source.input[source.token_begin:source.current]
+			return dash, nil
 		case c == '.':
 			//DOT startByte -> dot[label=".\n → token, token"];
 			//No range specified, let's write the number read until now as both
 			//start and end of the range
 			//100.0-10.0-.1
 			//^  ↑
-			value, err := checker(source.input[source.token_begin:source.current])
-			sink <- value
-			sink <- value
-			return dot, err
+			sink <- source.input[source.token_begin:source.current]
+			sink <- source.input[source.token_begin:source.current]
+			return dot, nil
 		default:
 			return nil, fmt.Errorf("Unexpected %s at index %d", string(c), source.current)
 		}
 	}
 	//The byte specified after a dash
-	endByte = func(source Input, sink chan byte) (State, error) {
+	endByte = func(source *Input, sink chan string) (State, error) {
+		log.Println("End Byte")
 		//Move cursor
 		source.current++
 		//Input is finished, let's hope everithing went well and exit gently
 		if source.current >= len(source.input) {
-			value, err := checker(source.input[source.token_begin:source.current])
-			if err != nil {
-				return nil, err
-			}
-			sink <- value
+			sink <- source.input[source.token_begin:source.current]
 			close(sink)
 			return nil, nil
 		}
+		log.Printf("End Byte (%s)\n", string(source.input[source.current]))
 		switch c := rune(source.input[source.current]); {
 		case unicode.IsNumber(c):
 			//DOT endByte -> endByte[label="\d"];
@@ -179,24 +179,25 @@ func parse(source Input) ([4][2]byte, error) {
 			//We matched a dot, let's emit the read end of the range and move to the dot phase
 			//100.0-10.0-.1
 			//      ^ ↑
-			value, err := checker(source.input[source.token_begin:source.current])
-			sink <- value
-			return dot, err
+			sink <- source.input[source.token_begin:source.current]
+			return dot, nil
 		default:
 			return nil, fmt.Errorf("Unexpected %s at index %d", string(c), source.current)
 		}
 	}
 	//The dash
-	dash = func(source Input, sink chan byte) (State, error) {
+	dash = func(source *Input, sink chan string) (State, error) {
+		log.Println("Dash")
 		//Move cursor
 		source.current++
 		//Input is finished, let's hope everithing went well and exit gently, default to 255 as
 		//range end
 		if source.current >= len(source.input) {
-			sink <- 255
+			sink <- "255"
 			close(sink)
 			return nil, nil
 		}
+		log.Printf("Dash (%s)\n", string(source.input[source.current]))
 		switch c := rune(source.input[source.current]); {
 		case unicode.IsNumber(c):
 			source.token_begin = source.current
@@ -212,20 +213,21 @@ func parse(source Input) ([4][2]byte, error) {
 			//No end value, default to 255
 			//100.0-10.0-.1
 			//         ^ ↑
-			sink <- 255
+			sink <- "255"
 			return dot, nil
 		default:
 			return nil, fmt.Errorf("Unexpected %s at index %d", string(c), source.current)
 		}
 	}
 	//The dot
-	dot = func(source Input, sink chan byte) (State, error) {
+	dot = func(source *Input, sink chan string) (State, error) {
 		//Move cursor
 		source.current++
 		//Dot can't be the last character
 		if source.current >= len(source.input) {
 			return nil, fmt.Errorf("Unexpected end of IP: %s", source.input)
 		}
+		log.Printf("Dot (%s)\n", string(source.input[source.current]))
 		switch c := rune(source.input[source.current]); {
 		case unicode.IsNumber(c):
 			//DOT dot-> startByte[label="\d\nmove cursor"];
@@ -242,7 +244,7 @@ func parse(source Input) ([4][2]byte, error) {
 			//100.0-10.0-.-1
 			//         ^
 			//            ↑
-			sink <- 0
+			sink <- "0"
 			return dash, nil
 		default:
 			return nil, fmt.Errorf("Unexpected %s at index %d", string(c), source.current)
@@ -251,27 +253,36 @@ func parse(source Input) ([4][2]byte, error) {
 	//DOT }
 	state := begin
 	//Lex can at most emit 2 tokens per call
-	out := make(chan byte, 2)
+	out := make(chan string, 2)
 	//Let's now parse the IP
+	log.Println("Starting parser")
 parse:
-	for err != nil {
+	for err == nil {
 		//Parser
 		select {
 		case token, ok := <-out:
 			if !ok {
+				log.Println("Channel closed")
 				//Someone closed the output channel, exit the parser
 				//Set error if premature end
 				if sink.cursor < 8 {
-					return sink.out, fmt.Errorf("Unexpected end of IP: %s", source.input)
+					err = fmt.Errorf("Unexpected end of IP: %s", source.input)
+					break parse
 				}
 				err = nil
 				break parse
 			}
+			log.Printf("Parsing lexed token '%s'\n", token)
 			//TODO if start > end the range should overflow: 254-3 should become 254,255,0,1,2,3
 			//if sink.cursor%2 == 1 && sink.out[sink.cursor-1] > sink.out[sink.cursor] {
 			//sink.out[sink.cursor], sink.out[sink.cursor-1] = sink.out[sink.cursor-1], sink.out[sink.cursor]
 			//}
-			err := sink.Write(token)
+			var value byte
+			value, err = checker(token)
+			if err != nil {
+				break parse
+			}
+			err = sink.Write(value)
 			if err != nil {
 				break parse
 			}
@@ -279,11 +290,11 @@ parse:
 			continue
 		default:
 		}
-		//TODO Parse here instead of checker
-		state, err = state(source, out)
+		log.Println("Lexing")
+		state, err = state(&source, out)
 	}
 	//drain the out channel in case we didn't parse everything before aborting
 	for _ = range out {
 	}
-	return sink.out, nil
+	return sink.out, err
 }

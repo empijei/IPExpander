@@ -285,7 +285,7 @@ parse:
 		}
 		log.Println("Lexing")
 		state, err = state(&source, out)
-		if state == nil {
+		if state == nil || err != nil {
 			//No state was returned, close the sink, shut down the parser
 			close(out)
 		}

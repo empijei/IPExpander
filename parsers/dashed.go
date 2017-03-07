@@ -119,12 +119,12 @@ func parse(source Input) ([4][2]byte, error) {
 	startByte = func(source *Input, sink chan string) (State, error) {
 		//Move cursor
 		source.current++
-		//Input is finished, let's hope everithing went well and exit gently using the
+		//Input is finished, let's hope everything went well and exit gently using the
 		//read byte as begin and start
 		if source.current >= len(source.input) {
 			sink <- source.input[source.token_begin:source.current]
 			sink <- source.input[source.token_begin:source.current]
-			return nil, io.EOF
+			return nil, nil
 		}
 		log.Printf("Start Byte (%s)\n", string(source.input[source.current]))
 		switch c := rune(source.input[source.current]); {
@@ -160,10 +160,9 @@ func parse(source Input) ([4][2]byte, error) {
 		log.Println("End Byte")
 		//Move cursor
 		source.current++
-		//Input is finished, let's hope everithing went well and exit gently
+		//Input is finished, let's hope everything went well and exit gently
 		if source.current >= len(source.input) {
 			sink <- source.input[source.token_begin:source.current]
-			close(sink)
 			return nil, nil
 		}
 		log.Printf("End Byte (%s)\n", string(source.input[source.current]))
@@ -187,14 +186,12 @@ func parse(source Input) ([4][2]byte, error) {
 	}
 	//The dash
 	dash = func(source *Input, sink chan string) (State, error) {
-		log.Println("Dash")
 		//Move cursor
 		source.current++
-		//Input is finished, let's hope everithing went well and exit gently, default to 255 as
+		//Input is finished, let's hope everything went well and exit gently, default to 255 as
 		//range end
 		if source.current >= len(source.input) {
 			sink <- "255"
-			close(sink)
 			return nil, nil
 		}
 		log.Printf("Dash (%s)\n", string(source.input[source.current]))
@@ -273,10 +270,6 @@ parse:
 				break parse
 			}
 			log.Printf("Parsing lexed token '%s'\n", token)
-			//TODO if start > end the range should overflow: 254-3 should become 254,255,0,1,2,3
-			//if sink.cursor%2 == 1 && sink.out[sink.cursor-1] > sink.out[sink.cursor] {
-			//sink.out[sink.cursor], sink.out[sink.cursor-1] = sink.out[sink.cursor-1], sink.out[sink.cursor]
-			//}
 			var value byte
 			value, err = checker(token)
 			if err != nil {
@@ -292,9 +285,10 @@ parse:
 		}
 		log.Println("Lexing")
 		state, err = state(&source, out)
-	}
-	//drain the out channel in case we didn't parse everything before aborting
-	for _ = range out {
+		if state == nil {
+			//No state was returned, close the sink, shut down the parser
+			close(out)
+		}
 	}
 	return sink.out, err
 }

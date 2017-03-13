@@ -92,6 +92,31 @@ var testIPS = []struct {
 		[]byte{},
 		true,
 	},
+	{
+		"10.0.0.270",
+		[]byte{},
+		true,
+	},
+	{
+		"10.0.0.27000000000000000000000000000000000000000",
+		[]byte{},
+		true,
+	},
+	{
+		"10.0.0.0.",
+		[]byte{},
+		true,
+	},
+	{
+		"10-1f.0.0.0.",
+		[]byte{},
+		true,
+	},
+	{
+		"1f.0.0.0.",
+		[]byte{},
+		true,
+	},
 }
 
 func TestParse(t *testing.T) {
